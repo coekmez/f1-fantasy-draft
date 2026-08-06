@@ -54,19 +54,33 @@ same order repeats every round.
 uv run main.py league status
 ```
 
-**Run the draft interactively** — prompts whoever's turn it is, in order,
-until every roster is full:
+**Run the draft in a TUI** — a full-screen terminal interface: available
+drivers/constructors with prices on the left (navigate with the arrow keys),
+all 4 managers' points, budget, and rosters on the right, with the manager on
+the clock highlighted:
 
 ```
 uv run main.py league draft
 ```
 
-Type `quit` (or Ctrl-D / Ctrl-C) at any prompt to stop; progress is saved
-after every pick, so re-running `league draft` later resumes exactly where
-you left off.
+- `Enter` picks the highlighted item for whoever's turn it is.
+- The on-the-clock manager's budget shows three lines: starting budget for
+  this session, current remaining, and — live, as you move the highlight —
+  what would remain if they picked the currently-highlighted item (shown in
+  red if it'd go negative).
+- `t` opens **trade mode**: a dialog to swap already-drafted items
+  (driver-for-driver or constructor-for-constructor) between any two
+  managers. Meant for the deadlock case — a manager can't afford anything
+  left in the pool — so someone can hand them a cheaper driver to unstick the
+  draft. Budgets adjust automatically by the traded items' current price
+  (give up something pricier than you receive and your remaining budget goes
+  up, and vice versa); there's no manual cash side-payment, so a trade only
+  ever balances against real item value, never moves money for its own sake.
+- `q` (or Ctrl-C) quits; progress is saved after every pick and trade, so
+  re-running `league draft` resumes exactly where you left off.
 
-**Or record a single pick manually** — useful for trades or fixing a
-mistake without going through the whole interactive flow:
+**Or record a single pick manually** — useful for fixing a mistake without
+going through the whole interactive flow:
 
 ```
 uv run main.py league pick Dave Verstappen
@@ -81,6 +95,6 @@ with `--force`), one owner per driver/constructor league-wide,
 
 ```
 f1_fantasy/   # read-only Fantasy data: HTTP client, scoring/domain logic, CLI
-league/       # draft league: models, JSON storage, draft domain logic, CLI
+league/       # draft league: models, JSON storage, draft domain logic, CLI, TUI (tui.py)
 main.py       # composes both packages' subcommands
 ```

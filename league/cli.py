@@ -56,39 +56,14 @@ def _pick(args):
 
 
 def _draft(args):
+    from .tui import DraftApp
+
     path = Path(args.path)
     league = load_league(path)
     client = FantasyClient()
+    market = client.fetch_current_players()
 
-    print("Interactive draft. Type 'quit' at any prompt to stop — progress is saved after every pick.\n")
-
-    while True:
-        turn = draft.whose_turn(league)
-        if turn is None:
-            print("Draft complete — every roster is full.")
-            break
-
-        roster_note = f'{len(turn.roster.drivers)}/{DRIVER_SLOTS} drivers, {len(turn.roster.constructors)}/{CONSTRUCTOR_SLOTS} constructors'
-        try:
-            query = input(f'{turn.name} ({roster_note}, {turn.money:g} money) — pick: ').strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nStopping. Resume anytime with 'league draft'.")
-            break
-
-        if query.lower() in ("quit", "exit", "q"):
-            print("Stopping. Resume anytime with 'league draft'.")
-            break
-        if not query:
-            continue
-
-        try:
-            message = draft.make_pick(league, client, turn.name, query)
-        except ValueError as e:
-            print(f'  {e}')
-            continue
-
-        save_league(league, path)
-        print(f'  {message}\n')
+    DraftApp(league, path, client, market).run()
 
 
 def add_subcommands(subparsers) -> None:
@@ -111,6 +86,6 @@ def add_subcommands(subparsers) -> None:
     pick.add_argument("--force", action="store_true", help="Bypass the turn-order check")
     pick.set_defaults(func=_pick)
 
-    draft_cmd = league_sub.add_parser("draft", help="Run the draft interactively, prompting each manager on their turn")
+    draft_cmd = league_sub.add_parser("draft", help="Run the draft in an interactive TUI")
     draft_cmd.add_argument("--path", default=str(DEFAULT_LEAGUE_PATH))
     draft_cmd.set_defaults(func=_draft)
