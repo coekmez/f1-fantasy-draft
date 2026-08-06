@@ -76,8 +76,12 @@ uv run main.py league draft
   (give up something pricier than you receive and your remaining budget goes
   up, and vice versa); there's no manual cash side-payment, so a trade only
   ever balances against real item value, never moves money for its own sake.
-- `q` (or Ctrl-C) quits; progress is saved after every pick and trade, so
-  re-running `league draft` resumes exactly where you left off.
+- `s` opens a confirmation dialog for **sell all** — the same end-of-week
+  settlement as `league sell` (see below), without leaving the TUI. On
+  confirm it also resets the "starting budget" baseline shown in each panel
+  to the new post-sell money, since that's the start of the next week.
+- `q` (or Ctrl-C) quits; progress is saved after every pick, trade, and sell,
+  so re-running `league draft` resumes exactly where you left off.
 
 **Or record a single pick manually** — useful for fixing a mistake without
 going through the whole interactive flow:
@@ -90,6 +94,34 @@ uv run main.py league pick Alice "Red Bull" --force   # bypass the turn check
 Both paths validate the same rules: turn order (manual picks can bypass this
 with `--force`), one owner per driver/constructor league-wide,
 5-driver/2-constructor roster caps, and enough money to afford the price.
+
+The league also tracks one **round** — the race weekend everyone's currently
+drafting for. It's `None` until the first pick of a fresh cycle, which sets
+it (visible in `league status` and the TUI header); every pick and trade
+after that shares the same round, since a league picks together in one
+sitting. `league sell` (below) clears it again once the week is settled.
+
+**One week of the draft is: pick -> race happens -> sell.** After the race,
+settle the week — this is how a manager's budget grows, exactly like real F1
+Fantasy: a driver who performed well is now worth more, and you realize that
+gain by selling.
+
+```
+uv run main.py league sell
+```
+
+This is global — it settles every manager's entire roster in one go using
+the league's current round, then clears all rosters (and the round) so the
+next week's picks start from scratch. Each manager is credited with the
+points their drivers/constructors earned in that round (not their
+whole-season total), and each item's price *in the round right after the
+pick* — not whatever the market shows today. The league doesn't always
+convene every week, so pricing off "today" would mean a manager's payout
+depends on drift from extra weeks they didn't control, instead of the value
+change their own pick's result actually caused. It refuses to run (and
+touches nothing) if no round is in progress, if that following round's data
+isn't published yet, or if any owned item
+can't be found in that round's data.
 
 ## Layout
 

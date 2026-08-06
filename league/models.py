@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Optional
 
 DRIVER_SLOTS = 5
 CONSTRUCTOR_SLOTS = 2
@@ -13,6 +14,9 @@ class Roster:
     def is_full(self) -> bool:
         return len(self.drivers) >= DRIVER_SLOTS and len(self.constructors) >= CONSTRUCTOR_SLOTS
 
+    def player_ids(self) -> list[str]:
+        return self.drivers + self.constructors
+
 
 @dataclass
 class Manager:
@@ -26,6 +30,7 @@ class Manager:
 class League:
     managers: list[Manager] = field(default_factory=list)
     draft_order: list[str] = field(default_factory=list)  # manager names, fixed at draft start
+    round: Optional[str] = None  # RaceWeekend.gameday_id all current picks belong to
 
 
 def new_league(manager_names: list[str]) -> League:

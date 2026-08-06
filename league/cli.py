@@ -2,7 +2,7 @@ from pathlib import Path
 
 from f1_fantasy.client import FantasyClient
 
-from . import draft
+from . import draft, settlement
 from .models import CONSTRUCTOR_SLOTS, DRIVER_SLOTS, new_league
 from .store import DEFAULT_LEAGUE_PATH, load_league, save_league
 
@@ -30,16 +30,17 @@ def _init(args):
 
 def _status(args):
     league = load_league(Path(args.path))
-    names_by_id = {p["PlayerId"]: p["FUllName"] for p in FantasyClient().fetch_current_players()}
+    market = FantasyClient().fetch_current_players()
 
     for m in league.managers:
         roster_note = f'{len(m.roster.drivers)}/{DRIVER_SLOTS} drivers, {len(m.roster.constructors)}/{CONSTRUCTOR_SLOTS} constructors'
         print(f'{m.name:<15} {m.points:>7g} pts   {m.money:>7g} money   {roster_note}')
         for pid in m.roster.drivers + m.roster.constructors:
-            print(f'    {names_by_id.get(pid, pid)}')
+            print(f'    {market.name_of(pid)}')
 
     turn = draft.whose_turn(league)
-    print(f"\nDraft order: {', '.join(league.draft_order)}")
+    print(f"\nRound: {league.round if league.round else '(none in progress)'}")
+    print(f"Draft order: {', '.join(league.draft_order)}")
     print(f"Next to pick: {turn.name if turn else '(draft complete)'}")
 
 
@@ -55,6 +56,27 @@ def _pick(args):
     print(message)
 
 
+def _sell(args):
+    path = Path(args.path)
+    league = load_league(path)
+    client = FantasyClient()
+
+    if not args.yes:
+        confirm = input("Sell every manager's roster and settle points/budget for the week? [y/N] ")
+        if confirm.strip().lower() not in ("y", "yes"):
+            print("Cancelled.")
+            return
+
+    try:
+        summaries = settlement.sell_all(league, client)
+    except ValueError as e:
+        raise SystemExit(str(e))
+
+    save_league(league, path)
+    for line in summaries:
+        print(line)
+
+
 def _draft(args):
     from .tui import DraftApp
 
@@ -63,7 +85,7 @@ def _draft(args):
     client = FantasyClient()
     market = client.fetch_current_players()
 
-    DraftApp(league, path, client, market).run()
+    DraftApp(league, path, market, client).run()
 
 
 def add_subcommands(subparsers) -> None:
@@ -89,3 +111,8 @@ def add_subcommands(subparsers) -> None:
     draft_cmd = league_sub.add_parser("draft", help="Run the draft in an interactive TUI")
     draft_cmd.add_argument("--path", default=str(DEFAULT_LEAGUE_PATH))
     draft_cmd.set_defaults(func=_draft)
+
+    sell = league_sub.add_parser("sell", help="End-of-week settlement: sell every manager's roster and clear it for next week")
+    sell.add_argument("--path", default=str(DEFAULT_LEAGUE_PATH))
+    sell.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
+    sell.set_defaults(func=_sell)

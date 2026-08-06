@@ -1,5 +1,5 @@
 from .client import FantasyClient
-from .models import RaceBreakdown, RaceWeekend, SessionPoints
+from .models import Market, Player, RaceBreakdown, RaceWeekend
 
 CATEGORY_LABELS = {
     "fastest_lap_pts": "Fastest lap",
@@ -14,26 +14,24 @@ CATEGORY_LABELS = {
 }
 
 
-def find_player(players: list[dict], query: str, position: str) -> dict:
+def find_player(market: Market, query: str, position: str) -> Player:
     query = query.lower()
-    matches = [
-        p for p in players
-        if p.get("PositionName") == position and query in p.get("FUllName", "").lower()
-    ]
+    entries = market.drivers() if position == "DRIVER" else market.constructors()
+    matches = [p for p in entries if query in p.name.lower()]
     if not matches:
         raise ValueError(f"No {position.lower()} found matching {query!r}")
     if len(matches) > 1:
-        names = ", ".join(p["FUllName"] for p in matches)
+        names = ", ".join(p.name for p in matches)
         raise ValueError(f"Multiple {position.lower()}s match {query!r}: {names}")
     return matches[0]
 
 
-def find_driver(players: list[dict], query: str) -> dict:
-    return find_player(players, query, "DRIVER")
+def find_driver(market: Market, query: str) -> Player:
+    return find_player(market, query, "DRIVER")
 
 
-def find_constructor(players: list[dict], query: str) -> dict:
-    return find_player(players, query, "CONSTRUCTOR")
+def find_constructor(market: Market, query: str) -> Player:
+    return find_player(market, query, "CONSTRUCTOR")
 
 
 def category_deltas(prev_stats: dict, curr_stats: dict) -> dict[str, float]:
@@ -55,24 +53,19 @@ def player_season(client: FantasyClient, player_id: str, weekends: list[RaceWeek
         if not weekend.is_completed:
             continue
 
-        drivers = client.fetch_gameday(weekend.gameday_id)
-        driver = next((d for d in drivers if d["PlayerId"] == player_id), None)
-        if not driver:
+        market = client.fetch_gameday(weekend.gameday_id)
+        player = market.by_id(player_id)
+        if not player:
             continue
 
-        sessions = [
-            SessionPoints(session_type=s["sessiontype"], points=s["points"])
-            for s in driver["SessionWisePoints"]
-            if s["points"] is not None
-        ]
-        categories = category_deltas(prev_stats, driver["AdditionalStats"])
+        categories = category_deltas(prev_stats, player.category_stats)
 
         breakdowns.append(RaceBreakdown(
             weekend=weekend,
-            points=float(driver["GamedayPoints"]),
-            sessions=sessions,
+            points=player.gameday_points,
+            sessions=player.sessions,
             categories=categories,
         ))
-        prev_stats = driver["AdditionalStats"]
+        prev_stats = player.category_stats
 
     return breakdowns

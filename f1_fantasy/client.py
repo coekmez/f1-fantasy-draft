@@ -1,6 +1,6 @@
 import requests
 
-from .models import RaceWeekend
+from .models import Market, Player, RaceWeekend
 
 FEEDS_URL = "https://fantasy.formula1.com/feeds"
 
@@ -24,13 +24,13 @@ class FantasyClient:
             weekends[gid] = RaceWeekend(gameday_id=gid, name=f["MeetingName"], status=f["GDStatus"])
         return sorted(weekends.values(), key=lambda w: int(w.gameday_id))
 
-    def fetch_gameday(self, gameday_id: str) -> list[dict]:
+    def fetch_gameday(self, gameday_id: str) -> Market:
         """Every driver/constructor with cumulative season stats as of this race weekend."""
         resp = self.session.get(f"{FEEDS_URL}/drivers/{gameday_id}_en.json", timeout=self.timeout)
         resp.raise_for_status()
-        return resp.json()["Data"]["Value"]
+        return Market([Player.from_feed(d) for d in resp.json()["Data"]["Value"]], gameday_id=gameday_id)
 
-    def fetch_current_players(self) -> list[dict]:
+    def fetch_current_players(self) -> Market:
         """All drivers/constructors with their current Fantasy price and season-to-date stats."""
         weekends = self.fetch_schedule()
         latest = next(w for w in reversed(weekends) if w.status in (1, 4))

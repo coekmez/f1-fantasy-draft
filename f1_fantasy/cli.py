@@ -1,25 +1,21 @@
 import json
 
 from .client import FantasyClient
+from .models import Market
 from .scoring import CATEGORY_LABELS, find_constructor, find_driver, player_season
 
 
-def print_players(players: list[dict], position: str) -> None:
-    for p in players:
-        if p["PositionName"] == position:
-            print(f'{p["PlayerId"]:>6}  {p["FUllName"]}')
+def print_players(market: Market, position: str) -> None:
+    entries = market.drivers() if position == "DRIVER" else market.constructors()
+    for p in entries:
+        print(f'{p.player_id:>6}  {p.name}')
 
 
-def print_prices(players: list[dict]) -> None:
-    for position, label in (("DRIVER", "Drivers"), ("CONSTRUCTOR", "Constructors")):
+def print_prices(market: Market) -> None:
+    for entries, label in ((market.drivers(), "Drivers"), (market.constructors(), "Constructors")):
         print(f'{label}:')
-        entries = sorted(
-            (p for p in players if p["PositionName"] == position),
-            key=lambda p: float(p["Value"]),
-            reverse=True,
-        )
-        for p in entries:
-            print(f'    {float(p["Value"]):>6.1f}  {p["FUllName"]}')
+        for p in sorted(entries, key=lambda p: p.price, reverse=True):
+            print(f'    {p.price:>6.1f}  {p.name}')
         print()
 
 
@@ -41,18 +37,29 @@ def print_breakdown(breakdowns: list) -> None:
     print(f"Season total: {total:g} pts")
 
 
-def print_scores(client: FantasyClient, weekends: list, current_players: list[dict], query: str, finder, as_json: bool) -> None:
+def print_scores(client: FantasyClient, weekends: list, current_players: Market, query: str, finder, as_json: bool) -> None:
     try:
         player = finder(current_players, query)
     except ValueError as e:
         raise SystemExit(str(e))
 
     if as_json:
-        print(json.dumps(player, indent=2))
+        print(json.dumps(player.raw, indent=2))
     else:
-        print(f'{player["FUllName"]}\n')
-        breakdowns = player_season(client, player["PlayerId"], weekends)
+        print(f'{player.name}\n')
+        breakdowns = player_season(client, player.player_id, weekends)
         print_breakdown(breakdowns)
+
+
+WEEKEND_STATUS_LABELS = {0: "upcoming", 1: "in progress", 4: "completed"}
+
+
+def _current_week(args):
+    client = FantasyClient()
+    weekends = client.fetch_schedule()
+    latest = next(w for w in reversed(weekends) if w.status in (1, 4))
+    status = WEEKEND_STATUS_LABELS.get(latest.status, str(latest.status))
+    print(f'Week {latest.gameday_id}: {latest.name} ({status})')
 
 
 def _drivers(args):
@@ -85,6 +92,7 @@ def _constructor_scores(args):
 
 
 def add_subcommands(subparsers) -> None:
+    subparsers.add_parser("current-week", help="Debug: show which race week the API currently considers 'now'").set_defaults(func=_current_week)
     subparsers.add_parser("drivers", help="List all Fantasy drivers and their IDs").set_defaults(func=_drivers)
     subparsers.add_parser("constructors", help="List all Fantasy constructors and their IDs").set_defaults(func=_constructors)
     subparsers.add_parser("prices", help="List all drivers and constructors with their current Fantasy price").set_defaults(func=_prices)

@@ -1,6 +1,7 @@
 from typing import Optional
 
 from f1_fantasy.client import FantasyClient
+from f1_fantasy.models import Market, Player
 
 from .models import CONSTRUCTOR_SLOTS, DRIVER_SLOTS, League, Manager
 
@@ -22,35 +23,38 @@ def whose_turn(league: League) -> Manager:
 
 
 def is_owned(league: League, player_id: str) -> bool:
-    return any(
-        player_id in m.roster.drivers or player_id in m.roster.constructors
-        for m in league.managers
-    )
+    return any(player_id in m.roster.player_ids() for m in league.managers)
 
 
-def find_item(market: list[dict], query: str) -> dict:
+def find_item(market: Market, query: str) -> Player:
     query = query.lower()
-    matches = [p for p in market if query in p.get("FUllName", "").lower()]
+    matches = [p for p in market if query in p.name.lower()]
     if not matches:
         raise ValueError(f"No driver or constructor found matching {query!r}")
     if len(matches) > 1:
-        names = ", ".join(f'{p["FUllName"]} ({p["PositionName"].title()})' for p in matches)
+        names = ", ".join(f'{p.name} ({p.position.title()})' for p in matches)
         raise ValueError(f"Multiple matches for {query!r}: {names}")
     return matches[0]
 
 
-def apply_pick(league: League, picker: Manager, item: dict, force: bool = False) -> str:
-    """Validate and apply one draft pick at the current fixed price. Mutates league in place."""
+def apply_pick(league: League, picker: Manager, item: Player, current_week: str, force: bool = False) -> str:
+    """Validate and apply one draft pick at the current fixed price. Mutates league in place.
+
+    current_week (a RaceWeekend.gameday_id) becomes league.round the first time a pick
+    is made in a fresh cycle (round is None), so every pick in the same session shares
+    one round number — everyone drafts together in one sitting, so there's no need to
+    track it per item. league.round is cleared again by settlement.sell_all().
+    """
     turn = whose_turn(league)
     if turn is None:
         raise ValueError("Draft is complete — every roster is full")
     if not force and turn.name != picker.name:
         raise ValueError(f"It's {turn.name}'s turn, not {picker.name}'s (use --force to override)")
 
-    if is_owned(league, item["PlayerId"]):
-        raise ValueError(f'{item["FUllName"]} has already been picked')
+    if is_owned(league, item.player_id):
+        raise ValueError(f'{item.name} has already been picked')
 
-    if item["PositionName"] == "DRIVER":
+    if item.is_driver:
         roster_list, slot_limit, slot_name = picker.roster.drivers, DRIVER_SLOTS, "drivers"
     else:
         roster_list, slot_limit, slot_name = picker.roster.constructors, CONSTRUCTOR_SLOTS, "constructors"
@@ -58,14 +62,16 @@ def apply_pick(league: League, picker: Manager, item: dict, force: bool = False)
     if len(roster_list) >= slot_limit:
         raise ValueError(f"{picker.name}'s {slot_name} roster is already full")
 
-    price = float(item["Value"])
-    if price > picker.money:
-        raise ValueError(f'{picker.name} cannot afford {item["FUllName"]} (costs {price:g}, has {picker.money:g})')
+    if item.price > picker.money:
+        raise ValueError(f'{picker.name} cannot afford {item.name} (costs {item.price:g}, has {picker.money:g})')
 
-    roster_list.append(item["PlayerId"])
-    picker.money -= price
+    roster_list.append(item.player_id)
+    picker.money -= item.price
 
-    return f'{picker.name} picks {item["FUllName"]} for {price:g}'
+    if league.round is None:
+        league.round = current_week
+
+    return f'{picker.name} picks {item.name} for {item.price:g}'
 
 
 def make_pick(league: League, client: FantasyClient, manager_name: str, query: str, force: bool = False) -> str:
@@ -74,8 +80,9 @@ def make_pick(league: League, client: FantasyClient, manager_name: str, query: s
     if picker is None:
         raise ValueError(f"No manager named {manager_name!r} in this league")
 
-    item = find_item(client.fetch_current_players(), query)
-    return apply_pick(league, picker, item, force=force)
+    market = client.fetch_current_players()
+    item = find_item(market, query)
+    return apply_pick(league, picker, item, market.gameday_id, force=force)
 
 
 def _locate(manager: Manager, player_id: str) -> str:
@@ -86,15 +93,15 @@ def _locate(manager: Manager, player_id: str) -> str:
     raise ValueError(f"{manager.name} does not own that item")
 
 
-def _price(market: list[dict], player_id: Optional[str]) -> float:
+def _price(market: Market, player_id: Optional[str]) -> float:
     if player_id is None:
         return 0.0
-    return float(next(p for p in market if p["PlayerId"] == player_id)["Value"])
+    return market.by_id(player_id).price
 
 
 def trade(
     league: League,
-    market: list[dict],
+    market: Market,
     manager_a: Manager,
     manager_b: Manager,
     give_a: Optional[str] = None,

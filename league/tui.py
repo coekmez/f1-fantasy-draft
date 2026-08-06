@@ -8,8 +8,9 @@ from textual.widgets import Button, Footer, Header, OptionList, Select, Static
 from textual.widgets.option_list import Option
 
 from f1_fantasy.client import FantasyClient
+from f1_fantasy.models import Market, Player
 
-from . import draft
+from . import draft, settlement
 from .models import CONSTRUCTOR_SLOTS, DRIVER_SLOTS, League, Manager
 from .store import save_league
 
@@ -37,11 +38,10 @@ class TradeScreen(ModalScreen[Optional[str]]):
     #buttons { align: right middle; height: auto; }
     """
 
-    def __init__(self, league: League, market: list[dict]):
+    def __init__(self, league: League, market: Market):
         super().__init__()
         self.league = league
         self.market = market
-        self.names_by_id = {p["PlayerId"]: p["FUllName"] for p in market}
 
     def compose(self) -> ComposeResult:
         manager_options = [(m.name, m.name) for m in self.league.managers]
@@ -65,9 +65,10 @@ class TradeScreen(ModalScreen[Optional[str]]):
     def _item_options(self, manager: Optional[Manager]) -> list:
         options = [("(nothing)", NO_ITEM)]
         if manager:
-            for pid in manager.roster.drivers + manager.roster.constructors:
-                price = float(next(p for p in self.market if p["PlayerId"] == pid)["Value"])
-                options.append((f'{self.names_by_id.get(pid, pid)} ({price:g})', pid))
+            for pid in manager.roster.player_ids():
+                player = self.market.by_id(pid)
+                label = f'{player.name} ({player.price:g})' if player else pid
+                options.append((label, pid))
         return options
 
     def on_select_changed(self, event: Select.Changed) -> None:
@@ -103,6 +104,44 @@ class TradeScreen(ModalScreen[Optional[str]]):
         self.dismiss(message)
 
 
+class ConfirmSellScreen(ModalScreen[bool]):
+    """One week of the draft is pick -> race -> sell. This confirms the sell step,
+    which settles every manager's roster at once and can't be undone in the UI."""
+
+    CSS = """
+    ConfirmSellScreen {
+        align: center middle;
+    }
+    #dialog {
+        width: 66;
+        height: auto;
+        border: thick $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+    #buttons { align: right middle; height: auto; margin-top: 1; }
+    """
+
+    def __init__(self, round_number: Optional[str]):
+        super().__init__()
+        self.round_number = round_number
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Static("[b]Sell every manager's roster?[/b]")
+            yield Static(
+                f"Credits each manager with the points their drivers/constructors "
+                f"earned in round {self.round_number}, plus their current price, "
+                f"then clears every roster for next week's picks."
+            )
+            with Horizontal(id="buttons"):
+                yield Button("Cancel", id="cancel")
+                yield Button("Sell", id="confirm", variant="warning")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm")
+
+
 class DraftApp(App):
     CSS = """
     #pool {
@@ -124,17 +163,16 @@ class DraftApp(App):
     }
     """
 
-    BINDINGS = [("q", "quit", "Quit"), ("t", "open_trade", "Trade")]
+    BINDINGS = [("q", "quit", "Quit"), ("t", "open_trade", "Trade"), ("s", "open_sell", "Sell all")]
 
-    def __init__(self, league: League, path: Path, client: FantasyClient, market: list[dict]):
+    def __init__(self, league: League, path: Path, market: Market, client: FantasyClient):
         super().__init__()
         self.league = league
         self.path = path
-        self.client = client
         self.market = market
-        self.names_by_id = {p["PlayerId"]: p["FUllName"] for p in market}
+        self.client = client  # only used for the explicit, user-triggered sell action
         self.start_money = {m.name: m.money for m in league.managers}
-        self.highlighted_item: Optional[dict] = None
+        self.highlighted_item: Optional[Player] = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -157,17 +195,14 @@ class DraftApp(App):
         highlighted = pool.highlighted
         pool.clear_options()
 
-        owned = {pid for m in self.league.managers for pid in m.roster.drivers + m.roster.constructors}
+        owned = {pid for m in self.league.managers for pid in m.roster.player_ids()}
 
-        for position, label in (("DRIVER", "DRIVERS"), ("CONSTRUCTOR", "CONSTRUCTORS")):
+        for entries, label in ((self.market.drivers(), "DRIVERS"), (self.market.constructors(), "CONSTRUCTORS")):
             pool.add_option(Option(f"── {label} ──", disabled=True))
-            items = sorted(
-                (p for p in self.market if p["PositionName"] == position and p["PlayerId"] not in owned),
-                key=lambda p: -float(p["Value"]),
-            )
+            items = sorted((p for p in entries if p.player_id not in owned), key=lambda p: -p.price)
             for item in items:
-                text = f'{float(item["Value"]):>5.1f}  {item["FUllName"]}'
-                pool.add_option(Option(text, id=item["PlayerId"]))
+                text = f'{item.price:>5.1f}  {item.name}'
+                pool.add_option(Option(text, id=item.player_id))
 
         if highlighted is not None and highlighted < pool.option_count:
             pool.highlighted = highlighted
@@ -181,10 +216,7 @@ class DraftApp(App):
             self.highlighted_item = None
             return
         option = pool.get_option_at_index(idx)
-        if option.id is None:
-            self.highlighted_item = None
-        else:
-            self.highlighted_item = next((p for p in self.market if p["PlayerId"] == option.id), None)
+        self.highlighted_item = self.market.by_id(option.id) if option.id else None
 
     def refresh_managers(self) -> None:
         turn = draft.whose_turn(self.league)
@@ -199,8 +231,7 @@ class DraftApp(App):
 
             remaining_line = f'Remaining: [b]{m.money:g}[/b]'
             if is_turn and self.highlighted_item is not None:
-                price = float(self.highlighted_item["Value"])
-                after = m.money - price
+                after = m.money - self.highlighted_item.price
                 color = "green" if after >= 0 else "red"
                 remaining_line += f'   if picked: [{color}]{after:g}[/{color}]'
             lines.append(remaining_line)
@@ -208,16 +239,17 @@ class DraftApp(App):
             lines.append("")
             lines.append(f'Drivers ({len(m.roster.drivers)}/{DRIVER_SLOTS}):')
             for pid in m.roster.drivers:
-                lines.append(f'  • {self.names_by_id.get(pid, pid)}')
+                lines.append(f'  • {self.market.name_of(pid)}')
 
             lines.append(f'Constructors ({len(m.roster.constructors)}/{CONSTRUCTOR_SLOTS}):')
             for pid in m.roster.constructors:
-                lines.append(f'  • {self.names_by_id.get(pid, pid)}')
+                lines.append(f'  • {self.market.name_of(pid)}')
 
             panel.update("\n".join(lines))
             panel.set_class(is_turn, "current-turn")
 
-        self.sub_title = f"{turn.name}'s turn" if turn else "Draft complete"
+        round_note = f"Round {self.league.round} — " if self.league.round else ""
+        self.sub_title = f"{round_note}{turn.name}'s turn" if turn else f"{round_note}Draft complete"
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id != "pool":
@@ -234,9 +266,9 @@ class DraftApp(App):
             self.notify("Draft is already complete.", severity="warning")
             return
 
-        item = next(p for p in self.market if p["PlayerId"] == event.option.id)
+        item = self.market.by_id(event.option.id)
         try:
-            message = draft.apply_pick(self.league, turn, item)
+            message = draft.apply_pick(self.league, turn, item, self.market.gameday_id)
         except ValueError as e:
             self.notify(str(e), severity="error")
             return
@@ -257,4 +289,25 @@ class DraftApp(App):
             return
         save_league(self.league, self.path)
         self.notify(message)
+        self.refresh_managers()
+
+    def action_open_sell(self) -> None:
+        self.push_screen(ConfirmSellScreen(self.league.round), self._after_sell)
+
+    def _after_sell(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+
+        try:
+            summaries = settlement.sell_all(self.league, self.client)
+        except ValueError as e:
+            self.notify(str(e), severity="error")
+            return
+
+        save_league(self.league, self.path)
+        for line in summaries:
+            self.notify(line)
+
+        self.start_money = {m.name: m.money for m in self.league.managers}
+        self.refresh_pool()
         self.refresh_managers()
