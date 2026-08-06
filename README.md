@@ -1,61 +1,86 @@
 # f1-fantasy-draft
 
-CLI for pulling driver **Fantasy** points from F1's unofficial fantasy API
-(fantasy-api.formula1.com) — not real-world championship standings.
+Tools for a 4-manager F1 Fantasy draft league:
+
+- Pull driver/constructor **Fantasy** points (not real-world championship
+  standings) from F1's public JSON feeds — no login required.
+- Track a locally-run, fixed-price draft: 4 managers, 5 drivers + 2
+  constructors each, turn order fixed by standings and repeating circularly
+  (not snake). Each pick costs whatever that driver/constructor's current
+  official Fantasy price is.
 
 ## Setup
 
 ```
 uv sync
-uv run playwright install chromium
 ```
 
-## Usage
-
-List all drivers and their IDs (no login needed):
+## Fantasy points
 
 ```
-uv run main.py drivers
+uv run main.py drivers                        # list drivers + IDs
+uv run main.py constructors                    # list constructors + IDs
+uv run main.py scores "Verstappen"              # per-race points breakdown
+uv run main.py constructor-scores "Ferrari"
+uv run main.py scores "Verstappen" --json       # raw data instead of a summary
+uv run main.py prices                           # every driver/constructor's current price, for reference
 ```
 
-Get a driver's points broken down by race and category:
+Data comes from `fantasy.formula1.com/feeds/...`. It's unofficial and
+undocumented (no SLA, can change without notice), but requires no
+authentication. The category breakdown (Overtakes, DOTD, DNF/DSQ, etc.) is
+derived by diffing F1's cumulative season stats between race weekends, so it
+covers the biggest scoring buckets but isn't always a byte-perfect itemized
+ledger of every point.
+
+## Draft league
+
+State (managers, points, money, rosters) lives in `league.json` (gitignored —
+it's local, personal data).
+
+**Set up or import the league's current hand-tracked state:**
 
 ```
-uv run main.py scores "Verstappen"
-uv run main.py scores "Verstappen" --json   # raw data instead of the summary
+uv run main.py league init
 ```
 
-The first `scores` call needs to authenticate. It opens a headless browser to
-pass F1's Akamai bot check, then logs in with your F1 account credentials —
-read from the `F1_EMAIL` / `F1_PASSWORD` environment variables, or typed in
-interactively if unset. The resulting session is cached in `.f1_session.json`
-so you don't have to log in again on every run; use `--relogin` to force a
-fresh login.
+Prompts for the 4 manager names, then each manager's current points and
+money. Draft order is fixed at this point: least points goes first, then that
+same order repeats every round.
 
-## If the automated login gets blocked
+**Check standings, rosters, and whose turn is next:**
 
-Akamai (F1's bot protection) may 403 the login request depending on the
-network you're running from, even with a legitimate cookie. If that happens,
-grab the auth header manually instead of logging in through the script:
+```
+uv run main.py league status
+```
 
-1. Log into <https://fantasy.formula1.com> in your normal browser.
-2. Open DevTools → Network, find any request to `fantasy-api.formula1.com`.
-3. Copy the value of the `X-F1-Cookie-Data` request header.
-4. Set it as an environment variable before running the script:
+**Run the draft interactively** — prompts whoever's turn it is, in order,
+until every roster is full:
 
-   ```
-   export F1_COOKIE_DATA="<paste the header value here>"
-   uv run main.py scores "Verstappen"
-   ```
+```
+uv run main.py league draft
+```
 
-This skips the login flow entirely. It'll expire after a while (F1 doesn't
-publish how long) — if requests start failing, just repeat the steps above.
+Type `quit` (or Ctrl-D / Ctrl-C) at any prompt to stop; progress is saved
+after every pick, so re-running `league draft` later resumes exactly where
+you left off.
 
-## Notes
+**Or record a single pick manually** — useful for trades or fixing a
+mistake without going through the whole interactive flow:
 
-- This is an unofficial, undocumented API — no SLA, no public contract, and
-  it can change or break without notice.
-- `game_periods_scores` returns Fantasy scoring events (qualifying position,
-  race position, overtakes, Driver of the Day, penalties, etc.), not the real
-  F1 Drivers' Championship. For real standings, use a source like
-  [OpenF1](https://openf1.org/) instead.
+```
+uv run main.py league pick Dave Verstappen
+uv run main.py league pick Alice "Red Bull" --force   # bypass the turn check
+```
+
+Both paths validate the same rules: turn order (manual picks can bypass this
+with `--force`), one owner per driver/constructor league-wide,
+5-driver/2-constructor roster caps, and enough money to afford the price.
+
+## Layout
+
+```
+f1_fantasy/   # read-only Fantasy data: HTTP client, scoring/domain logic, CLI
+league/       # draft league: models, JSON storage, draft domain logic, CLI
+main.py       # composes both packages' subcommands
+```

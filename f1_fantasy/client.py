@@ -29,3 +29,9 @@ class FantasyClient:
         resp = self.session.get(f"{FEEDS_URL}/drivers/{gameday_id}_en.json", timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()["Data"]["Value"]
+
+    def fetch_current_players(self) -> list[dict]:
+        """All drivers/constructors with their current Fantasy price and season-to-date stats."""
+        weekends = self.fetch_schedule()
+        latest = next(w for w in reversed(weekends) if w.status in (1, 4))
+        return self.fetch_gameday(latest.gameday_id)

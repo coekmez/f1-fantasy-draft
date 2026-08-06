@@ -9,5 +9,5 @@ wheels/
 # Virtual environments
 .venv
 
-# Cached F1 Fantasy login session
-.f1_session.json
+# Local league state
+league.json
