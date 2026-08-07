@@ -5,6 +5,22 @@ from f1_fantasy.client import FantasyClient
 from .models import League
 
 
+def _apply_and_clear(league: League, deltas: dict) -> list[str]:
+    """deltas: manager name -> (points_delta, money_delta). Applies them, clears every
+    roster, and resets league.round so next week's picks start fresh."""
+    summaries = []
+    for m in league.managers:
+        points_delta, money_delta = deltas[m.name]
+        m.points += points_delta
+        m.money += money_delta
+        m.roster.drivers.clear()
+        m.roster.constructors.clear()
+        summaries.append(f'{m.name}: +{points_delta:g} pts, +{money_delta:g} money')
+
+    league.round = None
+    return summaries
+
+
 def sell_all(league: League, client: FantasyClient) -> list[str]:
     """End-of-week settlement: 'make picks -> race happens -> sell drivers' is one
     week of the draft. This is the sell step, applied to every manager at once.
@@ -39,19 +55,37 @@ def sell_all(league: League, client: FantasyClient) -> list[str]:
             if price_market.by_id(player_id) is None:
                 raise ValueError(f"{player_id} not found in round {next_round}'s data")
 
-    summaries = []
+    deltas = {}
     for m in league.managers:
         player_ids = m.roster.player_ids()
         points_gained = sum(round_market.by_id(pid).gameday_points for pid in player_ids)
         money_gained = sum(price_market.by_id(pid).price for pid in player_ids)
+        deltas[m.name] = (points_gained, money_gained)
 
-        m.points += points_gained
-        m.money += money_gained
-        m.roster.drivers.clear()
-        m.roster.constructors.clear()
+    return _apply_and_clear(league, deltas)
 
-        summaries.append(f'{m.name}: +{points_gained:g} pts, +{money_gained:g} money')
 
-    league.round = None
+def reset_all(league: League, client: FantasyClient) -> list[str]:
+    """Undo the current round's picks: refund each manager exactly what they paid
+    (league.round's price for every item they hold — the price they were actually
+    charged at pick time, since picks are always made at the current round's price)
+    and clear every roster. Unlike sell_all, no points are credited — this is a
+    do-over, not a settlement. Mutates league in place; raises without changing
+    anything if it can't be reset.
+    """
+    if league.round is None:
+        raise ValueError("No round is currently in progress — nothing to reset")
 
-    return summaries
+    round_market = client.fetch_gameday(league.round)
+
+    for m in league.managers:
+        for player_id in m.roster.player_ids():
+            if round_market.by_id(player_id) is None:
+                raise ValueError(f"{player_id} not found in round {league.round}'s data")
+
+    deltas = {
+        m.name: (0.0, sum(round_market.by_id(pid).price for pid in m.roster.player_ids()))
+        for m in league.managers
+    }
+
+    return _apply_and_clear(league, deltas)

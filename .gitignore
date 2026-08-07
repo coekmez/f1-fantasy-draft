@@ -9,5 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
+# Test artifacts
+.pytest_cache/
+
 # Local league state
 league.json

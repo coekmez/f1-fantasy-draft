@@ -77,6 +77,27 @@ def _sell(args):
         print(line)
 
 
+def _reset(args):
+    path = Path(args.path)
+    league = load_league(path)
+    client = FantasyClient()
+
+    if not args.yes:
+        confirm = input("Reset every manager's roster for this round (refunds money, does not touch points)? [y/N] ")
+        if confirm.strip().lower() not in ("y", "yes"):
+            print("Cancelled.")
+            return
+
+    try:
+        summaries = settlement.reset_all(league, client)
+    except ValueError as e:
+        raise SystemExit(str(e))
+
+    save_league(league, path)
+    for line in summaries:
+        print(line)
+
+
 def _draft(args):
     from .tui import DraftApp
 
@@ -116,3 +137,8 @@ def add_subcommands(subparsers) -> None:
     sell.add_argument("--path", default=str(DEFAULT_LEAGUE_PATH))
     sell.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
     sell.set_defaults(func=_sell)
+
+    reset = league_sub.add_parser("reset", help="Undo this round's picks: refund the money spent, leave points untouched")
+    reset.add_argument("--path", default=str(DEFAULT_LEAGUE_PATH))
+    reset.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
+    reset.set_defaults(func=_reset)
