@@ -43,7 +43,7 @@ def apply_pick(league: League, picker: Manager, item: Player, current_week: str,
     current_week (a RaceWeekend.gameday_id) becomes league.round the first time a pick
     is made in a fresh cycle (round is None), so every pick in the same session shares
     one round number — everyone drafts together in one sitting, so there's no need to
-    track it per item. league.round is cleared again by settlement.sell_all().
+    track it per item. league.round is cleared again by settlement.end_week().
     """
     turn = whose_turn(league)
     if turn is None:

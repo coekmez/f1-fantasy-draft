@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import requests
 from textual.app import App, ComposeResult
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
@@ -13,12 +14,15 @@ from f1_fantasy.models import Market, Player
 
 from . import draft, settlement
 from .models import CONSTRUCTOR_SLOTS, DRIVER_SLOTS, League, Manager
-from .store import save_league
+from .store import save_league, save_round_snapshot
 
 
 class ConfirmSellScreen(ModalScreen[bool]):
     """One week of the draft is pick -> race -> sell. This confirms the sell step,
-    which settles every manager's roster at once and can't be undone in the UI."""
+    which settles every manager's roster at once and can't be undone in the UI:
+    everyone's points are credited and everyone's budget resets to the same flat
+    figure (see settlement.equal_budget), shown here ahead of time via
+    settlement.preview_end_week."""
 
     CSS = """
     ConfirmSellScreen {
@@ -34,17 +38,19 @@ class ConfirmSellScreen(ModalScreen[bool]):
     #buttons { align: right middle; height: auto; margin-top: 1; }
     """
 
-    def __init__(self, round_number: Optional[str]):
+    def __init__(self, round_number: Optional[str], predicted_budget: float):
         super().__init__()
         self.round_number = round_number
+        self.predicted_budget = predicted_budget
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Static("[b]Sell every manager's roster?[/b]")
             yield Static(
                 f"Credits each manager with the points their drivers/constructors "
-                f"earned in round {self.round_number}, plus their current price, "
-                f"then clears every roster for next week's picks."
+                f"earned in round {self.round_number}, resets everyone to the same "
+                f"flat budget ([b]{self.predicted_budget:g}[/b]), then clears every "
+                f"roster for next week's picks."
             )
             with Horizontal(id="buttons"):
                 yield Button("Cancel", id="cancel")
@@ -197,8 +203,8 @@ class DraftApp(App):
         super().__init__()
         self.league = league
         self.path = path
-        self.market = market
-        self.client = client  # only used for the explicit, user-triggered sell action
+        self.market = market  # the market currently driving pool prices/pricing
+        self.client = client
         self.highlighted_item: Optional[Player] = None
         self.undo_stack: list[PickAction] = []
         self.redo_stack: list[PickAction] = []
@@ -256,6 +262,9 @@ class DraftApp(App):
 
     def _manager_roster_ids(self) -> list:
         return [f"manager-roster-{self._widget_id(m)}" for m in self.league.managers]
+
+    def _current_week(self) -> str:
+        return self.market.gameday_id
 
     def _log_event(self, message: str, severity: str = "information") -> None:
         # A persistent, scrollable log instead of toast notifications — those piled up
@@ -396,9 +405,13 @@ class DraftApp(App):
             header.update("\n".join(lines))
             panel.set_class(is_turn, "current-turn")
 
-        round_note = f"Round {self.league.round} — " if self.league.round else ""
+        self.title = f"Week {self._current_week()}"
+
+        picks_note = f"Picks: week {self.league.round}" if self.league.round else "Picks: none yet"
         mode_note = " (select a trade slot)" if self.trade_mode else ""
-        self.sub_title = (f"{round_note}{turn.name}'s turn" if turn else f"{round_note}Draft complete") + mode_note
+        turn_note = f"{turn.name}'s turn" if turn else "Draft complete"
+        base = settlement.equal_budget(self.market, len(self.league.managers))
+        self.sub_title = f"{picks_note} — {turn_note}{mode_note} — Equal budget this week: {base:g}"
 
     def _refresh_manager_roster(self, roster: OptionList, manager: Manager) -> None:
         highlighted = roster.highlighted
@@ -615,14 +628,20 @@ class DraftApp(App):
         self.refresh_managers()
 
     def action_open_sell(self) -> None:
-        self.push_screen(ConfirmSellScreen(self.league.round), self._after_sell)
+        try:
+            predicted_budget = settlement.preview_end_week(self.league, self.client)
+        except ValueError as e:
+            self._log_event(str(e), severity="error")
+            return
+        self.push_screen(ConfirmSellScreen(self.league.round, predicted_budget), self._after_sell)
 
     def _after_sell(self, confirmed: bool) -> None:
         if not confirmed:
             return
 
+        round_sold = self.league.round
         try:
-            summaries = settlement.sell_all(self.league, self.client)
+            summaries = settlement.end_week(self.league, self.client)
         except ValueError as e:
             self._log_event(str(e), severity="error")
             return
@@ -633,11 +652,26 @@ class DraftApp(App):
         self.trade_first = None
 
         save_league(self.league, self.path)
+        save_round_snapshot(self.league, self.path, round_sold)
         for line in summaries:
             self._log_event(line)
 
+        self._advance_week()
+
         self.refresh_pool()
         self.refresh_managers()
+
+    def _advance_week(self) -> None:
+        """settlement.end_week just turned the crank on the round that was sold —
+        this is the one and only place the week counter (self.market, i.e. the pool
+        everyone's picking from) moves forward in response, to whatever the real F1
+        schedule now considers current. That may be more than one round further
+        along than what was just sold, if the league didn't convene every week.
+        """
+        try:
+            self.market = self.client.fetch_current_players()
+        except requests.RequestException as e:
+            self._log_event(f"Could not fetch next week's data ({e}) — still showing week {self.market.gameday_id}.", severity="error")
 
     def action_open_reset(self) -> None:
         self.push_screen(ConfirmResetScreen(self.league.round), self._after_reset)

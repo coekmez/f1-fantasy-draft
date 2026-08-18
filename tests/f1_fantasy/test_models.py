@@ -67,6 +67,16 @@ class TestPlayerFromFeed:
         assert player.gameday_points == 50.0
         assert player.season_points == 271.0
 
+    def test_player_id_is_coerced_to_a_string(self):
+        # regression: the real feed's JSON can carry PlayerId as a number, not a
+        # string, despite Player.player_id being typed str — a consumer that actually
+        # enforces that type (e.g. a Textual widget id) crashes outright on a raw int
+        entry = make_feed_entry(131, "Max Verstappen", 27.6)
+        player = Player.from_feed(entry)
+
+        assert player.player_id == "131"
+        assert isinstance(player.player_id, str)
+
 
 class TestMarket:
     def test_by_id_found_and_missing(self, sample_market):
@@ -88,3 +98,8 @@ class TestMarket:
     def test_gameday_id_is_recorded(self):
         market = make_market([make_player("131", "Max Verstappen", 27.6)], gameday_id="7")
         assert market.gameday_id == "7"
+
+    def test_gameday_id_is_coerced_to_a_string(self):
+        market = Market([make_player("131", "Max Verstappen", 27.6)], gameday_id=7)
+        assert market.gameday_id == "7"
+        assert isinstance(market.gameday_id, str)

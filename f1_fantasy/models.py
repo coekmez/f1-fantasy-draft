@@ -57,7 +57,7 @@ class Player:
             if s["points"] is not None
         ]
         return cls(
-            player_id=data["PlayerId"],
+            player_id=str(data["PlayerId"]),  # the feed's JSON can carry this as a number
             name=data["FUllName"],
             position=data["PositionName"],
             price=float(data["Value"]),
@@ -74,7 +74,7 @@ class Market:
 
     def __init__(self, players: list[Player], gameday_id: str):
         self.players = players
-        self.gameday_id = gameday_id
+        self.gameday_id = str(gameday_id)
         self._by_id = {p.player_id: p for p in players}
 
     def by_id(self, player_id: str) -> Optional[Player]:

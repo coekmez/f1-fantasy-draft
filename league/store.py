@@ -26,7 +26,11 @@ def load_league(path: Path = DEFAULT_LEAGUE_PATH) -> League:
         )
         for m in data["managers"]
     ]
-    return League(managers=managers, draft_order=data.get("draft_order", []), round=data.get("round"))
+    return League(
+        managers=managers,
+        draft_order=data.get("draft_order", []),
+        round=data.get("round"),
+    )
 
 
 def save_league(league: League, path: Path = DEFAULT_LEAGUE_PATH) -> None:
@@ -44,3 +48,13 @@ def save_league(league: League, path: Path = DEFAULT_LEAGUE_PATH) -> None:
         "round": league.round,
     }
     path.write_text(json.dumps(data, indent=2))
+
+
+def save_round_snapshot(league: League, path: Path, round_number: str) -> None:
+    """Archive the settled state of a just-sold round to past_weeks/, next to the
+    live league file, so history survives being overwritten by future sells. Safe
+    to call more than once for the same round — it just overwrites that round's
+    snapshot rather than piling up duplicates."""
+    snapshot_dir = path.parent / "past_weeks"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    save_league(league, snapshot_dir / f"round_{round_number}.json")

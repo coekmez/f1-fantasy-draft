@@ -67,6 +67,20 @@ class TestFetchSchedule:
         # lexicographic sort would put "10" before "2" — confirm it doesn't
         assert [w.gameday_id for w in weekends] == ["2", "10"]
 
+    def test_coerces_a_numeric_gameday_id_to_a_string(self):
+        # regression: the real feed's JSON can carry GamedayId as a number, not a
+        # string, despite RaceWeekend.gameday_id being typed str — a consumer that
+        # actually enforces that type (e.g. a Textual Input widget) crashes outright
+        # on a raw int, so this must be coerced right where it's parsed
+        payload = {"Data": {"fixtures": [{"GamedayId": 12, "MeetingName": "X", "GDStatus": 0}]}}
+        session = make_session({"schedule/raceday_en.json": FakeResponse(payload)})
+        client = FantasyClient(session=session)
+
+        weekends = client.fetch_schedule()
+
+        assert weekends[0].gameday_id == "12"
+        assert isinstance(weekends[0].gameday_id, str)
+
 
 class TestFetchGameday:
     def test_parses_players_into_a_market(self):
@@ -90,6 +104,19 @@ class TestFetchGameday:
 
         with pytest.raises(requests.HTTPError):
             client.fetch_gameday("13")
+
+    def test_coerces_an_integer_gameday_id_argument_to_a_string(self):
+        # a RaceWeekend.gameday_id could reach here as a real int (see
+        # TestFetchSchedule.test_coerces_a_numeric_gameday_id_to_a_string) before that
+        # fix, or from any other caller passing one directly
+        payload = {"Data": {"Value": [make_feed_entry("131", "Max Verstappen", 27.6)]}}
+        session = make_session({"drivers/12_en.json": FakeResponse(payload)})
+        client = FantasyClient(session=session)
+
+        market = client.fetch_gameday(12)
+
+        assert market.gameday_id == "12"
+        assert isinstance(market.gameday_id, str)
 
 
 class TestFetchCurrentPlayers:

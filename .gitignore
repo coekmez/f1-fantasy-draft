@@ -14,3 +14,4 @@ wheels/
 
 # Local league state
 league.json
+past_weeks/

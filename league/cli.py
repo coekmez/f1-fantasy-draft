@@ -4,7 +4,7 @@ from f1_fantasy.client import FantasyClient
 
 from . import draft, settlement
 from .models import CONSTRUCTOR_SLOTS, DRIVER_SLOTS, new_league
-from .store import DEFAULT_LEAGUE_PATH, load_league, save_league
+from .store import DEFAULT_LEAGUE_PATH, load_league, save_league, save_round_snapshot
 
 
 def _init(args):
@@ -62,17 +62,19 @@ def _sell(args):
     client = FantasyClient()
 
     if not args.yes:
-        confirm = input("Sell every manager's roster and settle points/budget for the week? [y/N] ")
+        confirm = input("Sell every manager's roster and settle the week? [y/N] ")
         if confirm.strip().lower() not in ("y", "yes"):
             print("Cancelled.")
             return
 
+    round_sold = league.round
     try:
-        summaries = settlement.sell_all(league, client)
+        summaries = settlement.end_week(league, client)
     except ValueError as e:
         raise SystemExit(str(e))
 
     save_league(league, path)
+    save_round_snapshot(league, path, round_sold)
     for line in summaries:
         print(line)
 

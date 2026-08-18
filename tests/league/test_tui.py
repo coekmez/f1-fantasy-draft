@@ -1,4 +1,5 @@
 import pytest
+import requests
 from textual.containers import Grid
 from textual.widgets import OptionList, RichLog, Static
 
@@ -453,7 +454,13 @@ class TestTrade:
 
 class TestSell:
     async def test_cancel_is_a_no_op(self, league_path, market):
-        app = make_app(league_path, market)
+        live_market = make_market([
+            make_player("124", "George Russell", 29.0, gameday_points=0.0),
+        ], gameday_id="13")
+        # week 12 was drafted, the race happened, week 13 is now live — so week 13 is
+        # both what the budget is sized against and what the pool moves on to.
+        client = FakeClient({"12": market, "13": live_market}, current_gameday_id="13")
+        app = make_app(league_path, market, client=client)
         async with app.run_test() as pilot:
             drivers = app.query_one("#pool-drivers", OptionList)
             drivers.focus()
@@ -472,10 +479,12 @@ class TestSell:
             assert app.league.round == "12"
 
     async def test_confirm_credits_points_and_price_then_clears_round(self, league_path, market):
-        next_round_market = make_market([
+        live_market = make_market([
             make_player("124", "George Russell", 29.0, gameday_points=0.0),
         ], gameday_id="13")
-        client = FakeClient({"12": market, "13": next_round_market}, current_gameday_id="12")
+        # week 12 was drafted, the race happened, week 13 is now live — so week 13 is
+        # both what the budget is sized against and what the pool moves on to.
+        client = FakeClient({"12": market, "13": live_market}, current_gameday_id="13")
         app = make_app(league_path, market, client=client)
 
         async with app.run_test() as pilot:
@@ -494,9 +503,145 @@ class TestSell:
             await pilot.pause()
 
             assert dave.points == points_before + 25.0
-            assert dave.money == pytest.approx(200.0 - 27.9 + 29.0)
+            assert dave.money == pytest.approx(8.0)  # ceil(29.0 / 4 managers) — the sole driver in next_round_market
             assert dave.roster.drivers == []
             assert app.league.round is None
+
+    async def test_selling_advances_the_pool_to_whatever_the_live_week_now_is(self, league_path, market):
+        # real life may have moved on by more than one round since the app opened —
+        # selling should land on round 20 (the live week), not round 13 (round+1)
+        next_round_market = make_market([
+            make_player("124", "George Russell", 29.0, gameday_points=0.0),
+        ], gameday_id="13")
+        live_market = make_market([
+            make_player("124", "George Russell", 99.0, gameday_points=0.0),
+        ], gameday_id="20")
+        client = FakeClient({"12": market, "13": next_round_market, "20": live_market}, current_gameday_id="20")
+        app = make_app(league_path, market, client=client)
+
+        async with app.run_test() as pilot:
+            drivers = app.query_one("#pool-drivers", OptionList)
+            drivers.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            await pilot.press("s")
+            await pilot.pause()
+            await pilot.click("#confirm")
+            await pilot.pause()
+
+            assert app.market.gameday_id == "20"
+            assert app.title == "Week 20"
+
+    async def test_selling_logs_an_error_and_keeps_the_old_pool_if_the_live_week_cant_be_fetched(self, league_path, market):
+        # settlement fetches the live week for the budget, then the pool refresh fetches
+        # it again — so the only way to lose the pool refresh alone is the network going
+        # down in between. Fail on the second call to land exactly in that window.
+        live_market = make_market([
+            make_player("124", "George Russell", 29.0, gameday_points=0.0),
+        ], gameday_id="13")
+
+        class FlakyClient(FakeClient):
+            """Fails from the third call on: the dialog's budget preview is call one and
+            settlement itself is call two, so that's the pool refresh and nothing else."""
+
+            calls = 0
+
+            def fetch_current_players(self):
+                FlakyClient.calls += 1
+                if FlakyClient.calls > 2:
+                    raise requests.ConnectionError("network went away")
+                return super().fetch_current_players()
+
+        client = FlakyClient({"12": market, "13": live_market}, current_gameday_id="13")
+        app = make_app(league_path, market, client=client)
+
+        async with app.run_test() as pilot:
+            drivers = app.query_one("#pool-drivers", OptionList)
+            drivers.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            await pilot.press("s")
+            await pilot.pause()
+            await pilot.click("#confirm")
+            await pilot.pause()
+
+            # the sell itself still went through — only the pool refresh afterward failed
+            assert app.league.round is None
+            assert app.market.gameday_id == "12"
+            assert "Could not fetch next week's data" in log_text(app)
+
+    async def test_sell_dialog_shows_the_predicted_flat_budget(self, league_path, market):
+        live_market = make_market([
+            make_player("124", "George Russell", 29.0, gameday_points=0.0),
+        ], gameday_id="13")
+        # week 12 was drafted, the race happened, week 13 is now live — so week 13 is
+        # both what the budget is sized against and what the pool moves on to.
+        client = FakeClient({"12": market, "13": live_market}, current_gameday_id="13")
+        app = make_app(league_path, market, client=client)
+
+        async with app.run_test() as pilot:
+            drivers = app.query_one("#pool-drivers", OptionList)
+            drivers.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # Dave picks George Russell (124)
+            await pilot.pause()
+
+            await pilot.press("s")
+            await pilot.pause()
+
+            dialog_text = "".join(str(s.render()) for s in app.screen.query(Static))
+            assert "8" in dialog_text  # ceil(29.0 / 4 managers) — the predicted flat budget everyone will land on
+
+            await pilot.click("#cancel")
+            await pilot.pause()
+            assert app.league.round == "12"  # nothing was actually confirmed
+
+    async def test_confirming_a_sell_writes_a_past_weeks_snapshot(self, tmp_path, league_path, market):
+        live_market = make_market([
+            make_player("124", "George Russell", 29.0, gameday_points=0.0),
+        ], gameday_id="13")
+        # week 12 was drafted, the race happened, week 13 is now live — so week 13 is
+        # both what the budget is sized against and what the pool moves on to.
+        client = FakeClient({"12": market, "13": live_market}, current_gameday_id="13")
+        app = make_app(league_path, market, client=client)
+
+        async with app.run_test() as pilot:
+            drivers = app.query_one("#pool-drivers", OptionList)
+            drivers.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            await pilot.press("s")
+            await pilot.pause()
+            await pilot.click("#confirm")
+            await pilot.pause()
+
+            snapshot_path = league_path.parent / "past_weeks" / "round_12.json"
+            assert snapshot_path.exists()
+            assert load_league(snapshot_path).round is None  # captures the post-sell, settled state
+
+    async def test_sell_is_blocked_with_a_clear_error_if_the_live_week_is_missing(self, league_path, market):
+        # the budget can't be sized without the week everyone is about to pick from,
+        # so there's nothing sensible to show in the dialog and no sell to confirm
+        client = FakeClient({"12": market}, current_gameday_id="999")
+        app = make_app(league_path, market, client=client)
+        async with app.run_test() as pilot:
+            drivers = app.query_one("#pool-drivers", OptionList)
+            drivers.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            await pilot.press("s")
+            await pilot.pause()
+
+            assert len(app.screen_stack) == 1  # the dialog never opened
+            assert "Could not fetch the current week" in log_text(app)
 
 
 class TestReset:
@@ -727,3 +872,23 @@ class TestEventLog:
             assert "cannot afford" in log_text(app)
             assert dave.roster.drivers == []  # the pick was correctly rejected
             assert len(app.screen_stack) == 1  # and nothing popped up over the screen
+
+
+class TestHeader:
+    async def test_shows_current_week_and_no_picks_yet(self, league_path, market):
+        app = make_app(league_path, market)
+        async with app.run_test():
+            assert app.title == "Week 12"
+            assert "Picks: none yet" in app.sub_title
+
+    async def test_shows_picks_week_after_a_pick(self, league_path, market):
+        app = make_app(league_path, market)
+        async with app.run_test() as pilot:
+            drivers = app.query_one("#pool-drivers", OptionList)
+            drivers.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert "Picks: week 12" in app.sub_title
+

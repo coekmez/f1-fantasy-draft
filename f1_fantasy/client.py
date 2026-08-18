@@ -20,12 +20,16 @@ class FantasyClient:
 
         weekends: dict[str, RaceWeekend] = {}
         for f in fixtures:
-            gid = f["GamedayId"]
+            # The feed's GamedayId is JSON, so it can come through as a number rather
+            # than a string — coerce here so every RaceWeekend.gameday_id downstream
+            # is genuinely the str its type hint promises, not just usually one.
+            gid = str(f["GamedayId"])
             weekends[gid] = RaceWeekend(gameday_id=gid, name=f["MeetingName"], status=f["GDStatus"])
         return sorted(weekends.values(), key=lambda w: int(w.gameday_id))
 
     def fetch_gameday(self, gameday_id: str) -> Market:
         """Every driver/constructor with cumulative season stats as of this race weekend."""
+        gameday_id = str(gameday_id)
         resp = self.session.get(f"{FEEDS_URL}/drivers/{gameday_id}_en.json", timeout=self.timeout)
         resp.raise_for_status()
         return Market([Player.from_feed(d) for d in resp.json()["Data"]["Value"]], gameday_id=gameday_id)

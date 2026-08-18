@@ -86,7 +86,7 @@ class TestSell:
         assert "Cancelled" in capsys.readouterr().out
         assert load_league(path).round == "1"
 
-    def test_yes_flag_skips_prompt(self, tmp_path, monkeypatch, sample_market):
+    def test_yes_flag_skips_the_prompt(self, tmp_path, monkeypatch, sample_market):
         path = tmp_path / "league.json"
         league = league_with_money()
         league.round = "12"
@@ -96,12 +96,29 @@ class TestSell:
             raise AssertionError("input() should not be called when --yes is set")
 
         monkeypatch.setattr("builtins.input", fail_if_called)
-        # only round 12 exists, no round 13 -> settlement.sell_all raises ValueError;
-        # the point of this test is just that we got past the prompt without calling input()
-        monkeypatch.setattr(league_cli, "FantasyClient", lambda: FakeClient({"12": sample_market}, current_gameday_id="12"))
+        # the live week has no data -> settlement.end_week raises ValueError; the point
+        # of this test is just that we got past the prompt without input()
+        monkeypatch.setattr(league_cli, "FantasyClient", lambda: FakeClient({"12": sample_market}, current_gameday_id="999"))
 
         with pytest.raises(SystemExit):
             league_cli._sell(make_args(path=str(path), yes=True))
+
+    def test_successful_sell_writes_a_past_weeks_snapshot(self, tmp_path, monkeypatch, capsys, sample_market):
+        next_round_market = FakeClient({"12": sample_market}, current_gameday_id="12").markets["12"]
+        path = tmp_path / "league.json"
+        league = league_with_money()
+        league.round = "12"
+        save_league(league, path)
+        monkeypatch.setattr(
+            league_cli, "FantasyClient",
+            lambda: FakeClient({"12": sample_market, "13": next_round_market}, current_gameday_id="12"),
+        )
+
+        league_cli._sell(make_args(path=str(path), yes=True))
+
+        snapshot_path = tmp_path / "past_weeks" / "round_12.json"
+        assert snapshot_path.exists()
+        assert load_league(snapshot_path).round is None  # captures the post-sell, settled state
 
 
 class TestReset:
